@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>psyneulink-ui</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">psyneulink-ui</div>
+    <div class="status" id="status">connecting…</div>
+  </header>
+
+  <main class="layout">
+    <section class="pane chat-pane">
+      <div class="scrollback" id="scrollback" aria-live="polite"></div>
+
+      <aside class="dock">
+        <h3>Resources</h3>
+        <ul class="resources" id="resources"></ul>
+        <div class="dock-actions">
+          <label class="upload-btn">
+            <input type="file" id="upload-pdf" accept="application/pdf,.pdf" hidden />
+            Upload PDF
+          </label>
+          <label class="upload-btn">
+            <input
+              type="file"
+              id="upload-data"
+              accept=".csv,.parquet,.jsonl,.tsv,text/csv"
+              hidden
+            />
+            Upload Data
+          </label>
+          <label class="upload-btn">
+            <input type="file" id="upload-model" accept=".py" hidden />
+            Upload Model (.py)
+          </label>
+          <button type="button" id="save-model-btn" class="dock-btn">
+            Save model as .py…
+          </button>
+        </div>
+      </aside>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <textarea
+          id="composer-input"
+          rows="3"
+          placeholder="Describe a model, ask a question, or request a tool call…"
+        ></textarea>
+        <button type="submit" id="composer-send" class="primary">Send</button>
+      </form>
+    </section>
+
+    <section class="pane graph-pane">
+      <div class="graph-header">
+        <div>
+          <div class="graph-title">Composition graph</div>
+          <div class="graph-meta" id="graph-meta">no composition yet</div>
+        </div>
+        <div class="graph-controls">
+          <label>
+            format
+            <select id="graph-format">
+              <option value="png" selected>png</option>
+              <option value="svg">svg</option>
+            </select>
+          </label>
+          <button type="button" id="graph-refresh" class="dock-btn">refresh</button>
+        </div>
+      </div>
+      <div class="graph-body">
+        <img id="graph-img" alt="composition graph" />
+        <div class="graph-empty" id="graph-empty">
+          Build or load a composition to see it rendered here.
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
