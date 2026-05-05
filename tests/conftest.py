@@ -41,11 +41,17 @@ class FakeSession:
     chat endpoint actually iterates over its yielded events.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, backend_kind: str = "sdk") -> None:
         self.model = "fake-model"
         self.history: list[dict[str, Any]] = []
         self.resources: list[Any] = []
         self.mcp_project = None
+
+        # Mirror the ``llm_backend`` strategy object the real Session
+        # carries (AnthropicSdkBackend / ClaudeCliBackend, both expose
+        # ``.kind``). The UI only reads ``.kind`` and ``.model``; tests
+        # that need other attrs can override .llm_backend directly.
+        self.llm_backend = MagicMock(kind=backend_kind, model=None)
 
         # ``list_tools_for_ui`` reaches in for ``_mcp``; give it any
         # truthy value so the "in lifespan" check passes. Tests that
@@ -114,7 +120,44 @@ def patch_session(monkeypatch):
 
 
 @pytest.fixture
+def patch_session_with_backend(monkeypatch):
+    """Variant of ``patch_session`` that lets a test pick the backend kind.
+
+    Returns a callable; pass it ``"sdk"`` or ``"cli"`` (or anything
+    else, e.g. ``"unknown"``) and subsequent ``REGISTRY.create()`` calls
+    will mint a ``FakeSession`` whose ``llm_backend.kind`` matches.
+    """
+
+    def _patch(kind: str) -> type[FakeSession]:
+        def factory() -> FakeSession:
+            return FakeSession(backend_kind=kind)
+
+        monkeypatch.setattr(state, "Session", factory)
+        return FakeSession
+
+    return _patch
+
+
+@pytest.fixture
 def client(patch_session):
     app = create_app()
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def client_factory(monkeypatch):
+    """Build a ``TestClient`` whose Session uses a specified backend kind.
+
+    Companion to ``patch_session_with_backend`` for route-level tests
+    that want the full HTTP round-trip with a non-default backend.
+    """
+
+    def _build(backend_kind: str = "sdk") -> TestClient:
+        def factory() -> FakeSession:
+            return FakeSession(backend_kind=backend_kind)
+
+        monkeypatch.setattr(state, "Session", factory)
+        return TestClient(create_app())
+
+    return _build

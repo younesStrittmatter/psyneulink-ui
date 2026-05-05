@@ -58,6 +58,23 @@ class UISession:
     # Held inside the AsyncExitStack so it gets cleaned up on close.
     _upload_dir: Path | None = field(default=None, repr=False)
 
+    @property
+    def backend_kind(self) -> str:
+        """Which LLM backend the underlying ``Session`` is using.
+
+        Either ``"sdk"`` (Anthropic Messages API via ``ANTHROPIC_API_KEY``)
+        or ``"cli"`` (the ``claude`` CLI, e.g. a Claude Max plan). Set by
+        ``Session()`` itself based on env vars / auto-detect — the UI
+        does not pick the backend, it only surfaces the choice so the
+        frontend can show which auth path is in use.
+
+        Returns ``"unknown"`` if the underlying ``Session`` doesn't yet
+        expose ``llm_backend.kind`` (e.g. on an older agent install
+        before the backend strategy landed). The UI keeps working —
+        the status line just shows ``backend: unknown`` instead.
+        """
+        return getattr(getattr(self.session, "llm_backend", None), "kind", "unknown")
+
     def upload_dir(self) -> Path:
         """Return (creating on first call) the tempdir for resource uploads."""
         if self._upload_dir is None:

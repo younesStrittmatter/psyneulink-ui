@@ -22,6 +22,7 @@ const state = {
 
 const els = {
   status: document.getElementById("status"),
+  backendLabel: document.getElementById("backend-label"),
   scrollback: document.getElementById("scrollback"),
   composer: document.getElementById("composer"),
   composerInput: document.getElementById("composer-input"),
@@ -47,6 +48,15 @@ function setStatus(text, klass) {
   els.status.className = "status" + (klass ? " " + klass : "");
 }
 
+function setBackendLabel(kind) {
+  // ``kind`` is "sdk" / "cli" / "unknown"; we render it verbatim so
+  // the label stays a faithful echo of what the server picked.
+  if (!els.backendLabel) return;
+  const value = kind || "unknown";
+  els.backendLabel.textContent = "backend: " + value;
+  els.backendLabel.classList.toggle("backend-unknown", value === "unknown");
+}
+
 // ---------------------------------------------------------------------------
 // session lifecycle
 // ---------------------------------------------------------------------------
@@ -60,6 +70,7 @@ async function ensureSession() {
   }
   const body = await res.json();
   state.sid = body.sid;
+  setBackendLabel(body.backend_kind);
   setStatus(`ready · ${body.model}`, "ok");
   await refreshResources();
   startGraphPolling();

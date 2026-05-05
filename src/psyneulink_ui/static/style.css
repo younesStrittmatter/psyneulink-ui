@@ -60,6 +60,27 @@ body {
 .status.ok { color: var(--success); }
 .status.err { color: var(--error); }
 
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.backend-label {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 7px;
+  letter-spacing: 0.02em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.backend-label.backend-unknown {
+  color: var(--error);
+  border-color: rgba(255, 122, 122, 0.4);
+}
+
 .layout {
   display: grid;
   grid-template-columns: minmax(380px, 1fr) minmax(380px, 1fr);

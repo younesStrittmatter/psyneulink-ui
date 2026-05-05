@@ -117,6 +117,10 @@ async def create_session() -> dict[str, Any]:
         "sid": ui.sid,
         "model": ui.session.model,
         "system_prompt_preview": prompt[:200],
+        # Which LLM backend ``Session`` picked (``"sdk"`` / ``"cli"`` /
+        # ``"unknown"``). Lets the frontend show ``backend: …`` in the
+        # status line without an extra round-trip.
+        "backend_kind": ui.backend_kind,
     }
 
 
@@ -139,6 +143,10 @@ async def get_session(sid: str) -> dict[str, Any]:
         "active_composition": ui.active_composition,
         "last_revision": ui.last_revision,
         "resources": snap.get("resources", []),
+        # Mirror of the field returned by ``POST /sessions`` so a
+        # browser refresh (which only does GET) still knows which LLM
+        # backend is in use.
+        "backend_kind": ui.backend_kind,
     }
 
 

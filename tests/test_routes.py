@@ -28,6 +28,33 @@ def test_post_session_returns_sid_and_model(client):
     assert body["system_prompt_preview"] == "fake system prompt"
 
 
+def test_post_session_includes_backend_kind(client):
+    r = client.post("/api/sessions")
+    assert r.status_code == 200
+    body = r.json()
+    # FakeSession defaults to backend_kind="sdk" — the wire field
+    # should mirror that so the frontend can paint the status line on
+    # the very first response without an extra round-trip.
+    assert body["backend_kind"] == "sdk"
+
+
+def test_get_session_includes_backend_kind(client):
+    sid = client.post("/api/sessions").json()["sid"]
+    snap = client.get(f"/api/sessions/{sid}").json()
+    assert snap["backend_kind"] == "sdk"
+
+
+def test_backend_kind_reflects_session_backend(client_factory):
+    # When the underlying Session was minted with the CLI backend,
+    # both endpoints should report ``"cli"`` — proving the UI is
+    # echoing whatever Session() picked, not hardcoding "sdk".
+    with client_factory("cli") as c:
+        post_body = c.post("/api/sessions").json()
+        assert post_body["backend_kind"] == "cli"
+        get_body = c.get(f"/api/sessions/{post_body['sid']}").json()
+        assert get_body["backend_kind"] == "cli"
+
+
 def test_delete_session_204_then_404(client):
     sid = client.post("/api/sessions").json()["sid"]
     r1 = client.delete(f"/api/sessions/{sid}")

@@ -19,10 +19,25 @@ single user, no auth.
 
 ## Install
 
-This repo uses [`uv`](https://docs.astral.sh/uv/) for dependency
-management. It depends on its sibling `psyneulink-agent` as an
-editable install (configured via `[tool.uv.sources]` in
-`pyproject.toml`), so the parent folder layout matters:
+### 1. System dependency: graphviz
+
+The graph pane shells out to the `dot` binary to render PNGs. Install
+it before anything else — the UI starts without it but the right pane
+will show errors instead of graphs.
+
+```bash
+# macOS
+brew install graphviz
+
+# Debian / Ubuntu
+sudo apt install graphviz
+```
+
+### 2. Python deps
+
+This repo uses [`uv`](https://docs.astral.sh/uv/) and depends on its
+sibling `psyneulink-agent` as an editable install (configured via
+`[tool.uv.sources]`), so the parent folder layout matters:
 
 ```
 psyneulink-ai/
@@ -37,6 +52,62 @@ cd psyneulink-ui
 uv sync
 uv run pytest -q
 ```
+
+### 3. LLM access (one of two backends)
+
+The chat pane needs an LLM. You can use either of:
+
+| Backend | What it uses | Auth | Set via |
+|--------|-------------|------|----------|
+| `sdk` (default) | Anthropic Messages API | `ANTHROPIC_API_KEY` env var | `export ANTHROPIC_API_KEY=sk-…` |
+| `cli` | `claude` CLI (Claude Max plan or whatever your CLI is logged into) | `claude auth login` | install Claude Code, run `claude auth login` once |
+
+The UI auto-detects: if `$ANTHROPIC_API_KEY` is set it picks `sdk`,
+otherwise if `claude` is on `$PATH` it picks `cli`. Override with
+`PSYNEULINK_LLM_BACKEND=sdk` or `PSYNEULINK_LLM_BACKEND=cli`.
+
+Under the hood the CLI backend runs the MCP server over HTTP/SSE on a
+free localhost port for the duration of the browser session, so both
+the chat (via `claude --print --output-format stream-json --mcp-config
+…`) and the graph pane (via direct `call_tool`) hit the same long-lived
+MCP — handles persist across turns either way.
+
+`graphviz` is required regardless of which backend you pick — the
+graph pane renders compositions through the MCP server in both modes.
+
+#### How to verify which backend was picked
+
+The status line in the top-right of the UI shows `backend: sdk` or
+`backend: cli`. Or, from a shell:
+
+```bash
+curl -s http://127.0.0.1:8000/api/sessions -X POST | jq .backend_kind
+# → "sdk" or "cli"
+```
+
+#### Troubleshooting (CLI backend, Claude Max plan)
+
+If the CLI path doesn't work on the first try:
+
+1. **Auth once, in your shell.** `claude auth login`. The Anthropic
+   plan that auths the CLI is the plan the UI's chat will burn
+   tokens against; subscription accounts (Claude Max, Pro) work too.
+2. **Use the same shell to launch the UI.** Auth state lives in your
+   user keychain / config dir; if you `claude auth login` in iTerm
+   and launch `uv run psyneulink-ui` from a fresh tmux pane that
+   inherited a stripped env, the CLI may not see the credentials.
+   `claude --version` should print a version *in the same shell* you
+   then run `uv run psyneulink-ui` from.
+3. **Force the backend if auto-detect picks wrong.** Auto-detect
+   prefers `sdk` whenever `$ANTHROPIC_API_KEY` is set, even if
+   you'd rather burn your Max plan than your API credit. Pin it
+   explicitly:
+   ```bash
+   PSYNEULINK_LLM_BACKEND=cli uv run psyneulink-ui
+   ```
+4. **First turn hangs forever.** Usually a stale `claude` subprocess
+   from a previous run still holds the SSE-MCP port. `pkill -f claude`
+   and restart the UI.
 
 ## Run
 
@@ -55,21 +126,6 @@ CLI flags:
 ```bash
 uv run psyneulink-ui --host 0.0.0.0 --port 9999 --reload --log-level debug
 ```
-
-## Runtime dependencies
-
-The UI process itself is small; the heavy work happens downstream
-through agent core and the MCP. Two external pieces are required at
-runtime (but not for tests):
-
-- **`ANTHROPIC_API_KEY`** in the environment. The chat pane drives
-  Anthropic's Messages API through agent core; without a key,
-  `send_user_message` will raise on the first turn.
-- **`graphviz` system binary**. The MCP's
-  `render_composition_graph` tool shells out to `dot` to render
-  PNGs. On macOS: `brew install graphviz`. On Debian/Ubuntu:
-  `apt install graphviz`. The UI starts fine without it — you'll
-  just see graph-render errors when you try to view a composition.
 
 ## Out of scope (intentional)
 

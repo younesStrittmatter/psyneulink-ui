@@ -66,3 +66,43 @@ def test_upload_dir_is_lazy_and_persistent(patch_session, tmp_path):
     # Cleanup happens on close.
     _run(state.REGISTRY.close(ui.sid))
     assert not d1.exists()
+
+
+# ---------------------------------------------------------------------------
+# UISession.backend_kind
+# ---------------------------------------------------------------------------
+
+
+def test_uisession_backend_kind_property(patch_session_with_backend):
+    # Pin the registry's Session factory to one that mints a
+    # FakeSession with ``llm_backend.kind == "cli"``; the UISession
+    # property should faithfully echo that.
+    patch_session_with_backend("cli")
+    ui = _run(state.REGISTRY.create())
+    assert ui.backend_kind == "cli"
+
+
+def test_uisession_backend_kind_default_is_sdk(patch_session):
+    # Default FakeSession() carries an ``llm_backend`` whose kind is
+    # ``"sdk"`` — guards the back-compat path for tests that pre-date
+    # the backend strategy and just call ``FakeSession()`` with no args.
+    ui = _run(state.REGISTRY.create())
+    assert ui.backend_kind == "sdk"
+
+
+def test_uisession_backend_kind_unknown_when_attr_missing(patch_session):
+    # A Session implementation that hasn't grown ``llm_backend.kind``
+    # yet (e.g. an older agent install) shouldn't crash the snapshot
+    # endpoint — the property falls back to ``"unknown"``.
+    ui = _run(state.REGISTRY.create())
+    # Drop the attribute we set in FakeSession.__init__ to simulate an
+    # older agent install where the backend strategy hasn't shipped.
+    del ui.session.llm_backend
+    assert ui.backend_kind == "unknown"
+
+    # Same fallback if ``llm_backend`` exists but lacks ``.kind``.
+    class Bare:
+        pass
+
+    ui.session.llm_backend = Bare()
+    assert ui.backend_kind == "unknown"
