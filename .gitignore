@@ -16,3 +16,8 @@ htmlcov/
 .vscode/
 .idea/
 *.swp
+
+# Runtime artifacts: model scripts written by the agent's
+# export_python_script tool when called without dry_run.
+/model.py
+/model-*.py
