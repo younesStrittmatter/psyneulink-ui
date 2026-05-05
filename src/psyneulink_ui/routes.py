@@ -11,9 +11,19 @@ Endpoint families:
   ``DELETE /api/sessions/{sid}``, ``GET /api/sessions/{sid}``).
 * **Chat** (``POST /api/sessions/{sid}/chat``) — streams events from
   ``Session.send_user_message`` as Server-Sent Events.
+* **Cancel** (``POST /api/sessions/{sid}/cancel``) — interrupt the
+  currently-streaming chat turn. Signal-only: returns 200 immediately
+  with ``{"cancelled": <bool>}``; the SSE stream itself emits a
+  ``turn_cancelled`` event before its final ``end``.
 * **Graph** (``GET /api/sessions/{sid}/graph``,
   ``GET /api/sessions/{sid}/graph/revision``) — wraps the MCP tools
   ``render_composition_graph`` and ``get_composition_revision``.
+* **Code** (``GET /api/sessions/{sid}/code``) — live-preview pane
+  fed by ``export_python_script(dry_run=True)``. **Coupling note**:
+  this endpoint depends on the ``dry_run`` flag added to
+  ``export_python_script`` in ``psyneulink-mcp``. If the MCP ever
+  drops it (or renames it), this pane goes blank — keep them in
+  lockstep.
 * **Resources** (``POST /api/sessions/{sid}/resources/{kind}``,
   ``GET /api/sessions/{sid}/resources``,
   ``DELETE /api/sessions/{sid}/resources/{index}``).
@@ -260,10 +270,26 @@ async def chat(sid: str, request: Request) -> StreamingResponse:
                         "turn_complete",
                         {"reason": ev.get("stop_reason")},
                     )
+                elif etype == "turn_cancelled":
+                    # Backend honoured a Stop button press. Surface it
+                    # as a first-class event so the JS handler can
+                    # paint a cancelled marker in the scrollback
+                    # before the stream's terminal ``end`` arrives.
+                    yield sse_event("turn_cancelled", {})
+                    break
                 else:
                     # Forward anything else verbatim so we don't
                     # silently drop new event types added later.
                     yield sse_event(etype or "unknown", ev)
+
+                # Belt-and-suspenders: even if the backend hasn't yet
+                # surfaced ``turn_cancelled``, observe the Session-level
+                # cancel flag between events and bail. Keeps the stream
+                # responsive when a backend is slow to react.
+                cancel_ev = getattr(ui.session, "_cancel_event", None)
+                if cancel_ev is not None and cancel_ev.is_set():
+                    yield sse_event("turn_cancelled", {})
+                    break
         except Exception as exc:  # noqa: BLE001 — surface to client, never crash the stream
             log.exception("chat stream failed")
             yield sse_event(
@@ -274,6 +300,30 @@ async def chat(sid: str, request: Request) -> StreamingResponse:
             yield sse_event("end", {})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/sessions/{sid}/cancel")
+async def cancel_chat(sid: str) -> dict[str, Any]:
+    """Signal-only: ask the active chat turn to stop.
+
+    Returns immediately with ``{"cancelled": True}`` if a turn was in
+    flight (the SSE stream will then emit ``turn_cancelled`` followed
+    by ``end``), or ``{"cancelled": False, "reason": "no active turn"}``
+    if nothing was running. Never blocks waiting for the stream to
+    actually wind down — the front-end fires this and forgets, then
+    waits for the SSE side to close.
+    """
+    ui = _require(sid)
+    cancel_method = getattr(ui.session, "cancel_current_turn", None)
+    if cancel_method is None:
+        # Older agent install without the cancel hook. Don't 500 —
+        # report it the same way as "no active turn" so the UI
+        # gracefully no-ops.
+        return {"cancelled": False, "reason": "session has no cancel hook"}
+    cancelled = bool(cancel_method())
+    if not cancelled:
+        return {"cancelled": False, "reason": "no active turn"}
+    return {"cancelled": True}
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +362,49 @@ async def graph_revision(sid: str, composition: str | None = None) -> dict[str, 
     if "revision" in parsed and isinstance(parsed["revision"], int):
         ui.last_revision = parsed["revision"]
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# code preview pane
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sessions/{sid}/code")
+async def code(sid: str, composition: str | None = None) -> Response:
+    """Return the current composition rendered as a Python script.
+
+    Calls the MCP's ``export_python_script`` with ``dry_run=True`` so
+    no file is written — this is a live preview, not a save. Polled
+    by the frontend on the same revision tick that drives the graph
+    pane (no separate timer). 204 when there's no active composition,
+    same as ``GET /graph``.
+
+    **Cross-repo coupling**: the ``dry_run`` flag is defined in
+    ``psyneulink-mcp/src/psyneulink_mcp/tools/curated/persistence.py``.
+    If that argument disappears or changes name, this endpoint silently
+    starts writing files on every poll — keep them in sync.
+    """
+    ui = _require(sid)
+    handle = composition or ui.active_composition
+    if handle is None:
+        return Response(status_code=204)
+    raw = await ui.session.call_tool(
+        "export_python_script",
+        {"composition": handle, "dry_run": True},
+    )
+    parsed = _parse_tool_json(raw)
+    text = parsed.get("text", "")
+    if not isinstance(text, str):
+        text = str(text)
+    payload = {
+        "composition": handle,
+        "revision": ui.last_revision,
+        "text": text,
+        "n_objects": parsed.get("n_objects"),
+        "n_operations": parsed.get("n_operations"),
+        "error": parsed.get("error"),
+    }
+    return Response(content=json.dumps(payload), media_type="application/json")
 
 
 # ---------------------------------------------------------------------------

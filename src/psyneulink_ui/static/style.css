@@ -281,11 +281,86 @@ body {
   cursor: not-allowed;
 }
 
-.graph-pane {
+.composer-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Stop button: visible only while a chat SSE stream is open. Sits next
+ * to Send and uses the error palette so it reads as a "halt this" affordance,
+ * not a reset. ``hidden`` is toggled from app.js based on stream state. */
+.stop-btn {
+  background: transparent;
+  color: var(--error);
+  border: 1px solid rgba(255, 122, 122, 0.5);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+}
+.stop-btn:hover {
+  background: rgba(255, 122, 122, 0.12);
+  border-color: var(--error);
+}
+.stop-btn[hidden] {
+  display: none !important;
+}
+
+/* In-stream cancellation marker rendered inside the assistant message
+ * body when ``turn_cancelled`` arrives. Keeps the scrollback honest:
+ * the user can see what was cut short. */
+.cancelled-marker {
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(255, 122, 122, 0.10);
+  color: var(--error);
+  border-left: 2px solid var(--error);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* Right-hand pane: tabbed wrapper that swaps between Graph and Code.
+ * Tab toggle (rather than vertical split) keeps either view full-height —
+ * compositions get tall fast and so do exported scripts; cramming both
+ * onto a 50/50 split was the cramped option. */
+.right-pane {
   display: grid;
   grid-template-rows: auto 1fr;
 }
-.graph-header {
+.right-tabs {
+  display: flex;
+  gap: 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.right-tab {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+.right-tab:hover { color: var(--text); }
+.right-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.right-tab-panel {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+}
+.right-tab-panel[hidden] { display: none; }
+
+.graph-header,
+.code-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -294,9 +369,12 @@ body {
   border-bottom: 1px solid var(--border);
   gap: 10px;
 }
-.graph-title { font-weight: 600; }
-.graph-meta { color: var(--muted); font-size: 12px; }
-.graph-controls {
+.graph-title,
+.code-title { font-weight: 600; }
+.graph-meta,
+.code-meta { color: var(--muted); font-size: 12px; }
+.graph-controls,
+.code-controls {
   display: flex;
   gap: 8px;
   align-items: center;
@@ -330,9 +408,37 @@ body {
   border-radius: var(--radius);
 }
 .graph-body img.loaded { display: block; }
-.graph-empty {
+.graph-empty,
+.code-empty {
   color: var(--muted);
   text-align: center;
   font-style: italic;
 }
 .graph-body img.loaded ~ .graph-empty { display: none; }
+
+.code-body {
+  position: relative;
+  background: var(--panel-2);
+  overflow: auto;
+  min-height: 0;
+}
+.code-pre {
+  margin: 0;
+  padding: 14px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre;
+  overflow: auto;
+}
+.code-pre code { display: block; }
+.code-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.code-pre.loaded ~ .code-empty { display: none; }

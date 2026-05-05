@@ -58,6 +58,24 @@ class FakeSession:
         # exercise the tools endpoint can override it further.
         self._mcp = MagicMock()
 
+        # Mirror the per-turn cancel event the real Session manages.
+        # Cancel-flow tests poke this directly to simulate an in-flight
+        # turn; the chat SSE handler reads it as a "is a turn currently
+        # cancellable?" signal.
+        self._cancel_event = None
+
+        # cancel_current_turn() returns True iff a turn was in flight.
+        # The default fake just toggles based on _cancel_event presence
+        # so tests that wire one up get True.
+        def _cancel_turn() -> bool:
+            ev = self._cancel_event
+            if ev is None:
+                return False
+            ev.set()
+            return True
+
+        self.cancel_current_turn = MagicMock(side_effect=_cancel_turn)
+
         self.attach = MagicMock(side_effect=lambda r: self.resources.append(r))
         self.detach = MagicMock(side_effect=lambda r: self.resources.remove(r))
         self.system_prompt = MagicMock(return_value="fake system prompt")

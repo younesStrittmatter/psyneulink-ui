@@ -18,6 +18,12 @@ const state = {
   inFlight: false,
   currentAssistantMsg: null,
   toolCardsById: new Map(),
+  // Latest composition rendered into the code pane. Tracked separately
+  // from ``lastComposition`` so a tab switch (Graph → Code) can decide
+  // whether the visible code is still current without re-fetching.
+  lastCodeRevision: -1,
+  lastCodeComposition: null,
+  activeRightTab: "graph",
 };
 
 const els = {
@@ -27,6 +33,7 @@ const els = {
   composer: document.getElementById("composer"),
   composerInput: document.getElementById("composer-input"),
   composerSend: document.getElementById("composer-send"),
+  composerStop: document.getElementById("composer-stop"),
   resources: document.getElementById("resources"),
   uploadPdf: document.getElementById("upload-pdf"),
   uploadData: document.getElementById("upload-data"),
@@ -37,6 +44,15 @@ const els = {
   graphMeta: document.getElementById("graph-meta"),
   graphFormat: document.getElementById("graph-format"),
   graphRefresh: document.getElementById("graph-refresh"),
+  tabGraph: document.getElementById("tab-graph"),
+  tabCode: document.getElementById("tab-code"),
+  panelGraph: document.getElementById("panel-graph"),
+  panelCode: document.getElementById("panel-code"),
+  codePre: document.querySelector(".code-pre"),
+  codeText: document.getElementById("code-text"),
+  codeEmpty: document.getElementById("code-empty"),
+  codeMeta: document.getElementById("code-meta"),
+  codeRefresh: document.getElementById("code-refresh"),
 };
 
 // ---------------------------------------------------------------------------
@@ -177,10 +193,27 @@ function parseSseFrame(raw) {
   return { event, data };
 }
 
+function setInFlight(flag) {
+  state.inFlight = flag;
+  els.composerSend.disabled = flag;
+  // Stop button is only meaningful while the SSE stream is open.
+  if (els.composerStop) {
+    els.composerStop.hidden = !flag;
+  }
+}
+
+function appendCancelMarker() {
+  if (state.currentAssistantMsg === null) startAssistantMessage();
+  const marker = document.createElement("div");
+  marker.className = "cancelled-marker";
+  marker.textContent = "Stopped by user.";
+  state.currentAssistantMsg.appendChild(marker);
+  scrollToBottom();
+}
+
 async function streamChat(message) {
   if (!state.sid) return;
-  state.inFlight = true;
-  els.composerSend.disabled = true;
+  setInFlight(true);
 
   appendUserMessage(message);
   startAssistantMessage();
@@ -194,14 +227,12 @@ async function streamChat(message) {
     });
   } catch (err) {
     appendAssistantText(`\n[network error: ${err}]`);
-    state.inFlight = false;
-    els.composerSend.disabled = false;
+    setInFlight(false);
     return;
   }
   if (!res.ok || !res.body) {
     appendAssistantText(`\n[server error: HTTP ${res.status}]`);
-    state.inFlight = false;
-    els.composerSend.disabled = false;
+    setInFlight(false);
     return;
   }
 
@@ -225,10 +256,26 @@ async function streamChat(message) {
 
   state.currentAssistantMsg = null;
   state.toolCardsById.clear();
-  state.inFlight = false;
-  els.composerSend.disabled = false;
-  // A turn just finished — there's a good chance the graph mutated.
+  setInFlight(false);
+  // A turn just finished (or was cancelled) — graph and code may have
+  // moved. forceGraphRefresh refetches the graph; the code pane piggy-
+  // backs on the same revision tick so it'll catch up on the next poll.
   forceGraphRefresh();
+}
+
+async function cancelCurrentTurn() {
+  if (!state.sid || !state.inFlight) return;
+  // Disable the button to prevent double-click; the SSE stream's
+  // closure will flip it (and Send) back via setInFlight(false).
+  if (els.composerStop) els.composerStop.disabled = true;
+  try {
+    await fetch(`/api/sessions/${state.sid}/cancel`, { method: "POST" });
+  } catch (_e) {
+    // Network failure → server already torn down or unreachable. The
+    // SSE reader loop will eventually unblock; nothing to do here.
+  } finally {
+    if (els.composerStop) els.composerStop.disabled = false;
+  }
 }
 
 function handleEvent({ event, data }) {
@@ -244,6 +291,9 @@ function handleEvent({ event, data }) {
       break;
     case "turn_complete":
       // no-op; user can send the next message
+      break;
+    case "turn_cancelled":
+      appendCancelMarker();
       break;
     case "error":
       appendAssistantText(`\n[${data.message || "error"}]`);
@@ -279,7 +329,10 @@ async function pollRevision() {
     ) {
       state.lastRevision = body.revision;
       state.lastComposition = body.composition;
-      await fetchGraph();
+      // Both the graph and the code pane are downstream of the same
+      // revision counter — refresh them together so the two views
+      // never disagree on what's currently in the composition.
+      await Promise.all([fetchGraph(), fetchCode()]);
     }
   } catch (_e) {
     // network blip; the next tick will retry
@@ -288,6 +341,7 @@ async function pollRevision() {
 
 async function forceGraphRefresh() {
   state.lastRevision = -1; // force the next poll to refetch
+  state.lastCodeRevision = -1;
   await pollRevision();
 }
 
@@ -321,6 +375,68 @@ async function fetchGraph() {
     `${body.composition || "?"} · rev ${body.revision ?? "?"}` +
     (body.n_nodes != null ? ` · ${body.n_nodes} nodes` : "") +
     (body.n_projections != null ? ` · ${body.n_projections} projections` : "");
+}
+
+// ---------------------------------------------------------------------------
+// code preview pane
+//
+// Driven by the same revision tick as the graph (no separate timer).
+// Backend hits the MCP's ``export_python_script`` with ``dry_run=true``
+// so polling doesn't spray ``.py`` files on disk every 1.5s.
+// ---------------------------------------------------------------------------
+
+async function fetchCode() {
+  if (!state.sid) return;
+  if (!els.codeText) return;
+  let r;
+  try {
+    r = await fetch(`/api/sessions/${state.sid}/code`);
+  } catch (_e) {
+    return;
+  }
+  if (r.status === 204) {
+    els.codeText.textContent = "";
+    els.codePre.classList.remove("loaded");
+    els.codeEmpty.style.display = "flex";
+    els.codeMeta.textContent = "no composition yet";
+    state.lastCodeComposition = null;
+    state.lastCodeRevision = -1;
+    return;
+  }
+  if (!r.ok) {
+    els.codeMeta.textContent = `render failed: HTTP ${r.status}`;
+    return;
+  }
+  const body = await r.json();
+  if (body.error) {
+    els.codeMeta.textContent = `error: ${body.error}`;
+    return;
+  }
+  els.codeText.textContent = body.text || "";
+  els.codePre.classList.add("loaded");
+  els.codeEmpty.style.display = "none";
+  state.lastCodeComposition = body.composition;
+  state.lastCodeRevision = body.revision ?? state.lastCodeRevision;
+  els.codeMeta.textContent =
+    `${body.composition || "?"} · rev ${body.revision ?? "?"}` +
+    (body.n_objects != null ? ` · ${body.n_objects} objects` : "") +
+    (body.n_operations != null ? ` · ${body.n_operations} ops` : "");
+}
+
+function showRightTab(name) {
+  state.activeRightTab = name;
+  const isGraph = name === "graph";
+  els.tabGraph.classList.toggle("active", isGraph);
+  els.tabCode.classList.toggle("active", !isGraph);
+  els.tabGraph.setAttribute("aria-selected", isGraph ? "true" : "false");
+  els.tabCode.setAttribute("aria-selected", isGraph ? "false" : "true");
+  els.panelGraph.hidden = !isGraph;
+  els.panelCode.hidden = isGraph;
+  // Switching to Code while a fresh revision is pending? Pull immediately
+  // rather than waiting for the next 1.5s tick.
+  if (!isGraph && state.lastCodeRevision !== state.lastRevision) {
+    fetchCode();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +555,12 @@ els.uploadModel.addEventListener("change", (ev) => {
 els.saveModelBtn.addEventListener("click", saveModel);
 els.graphRefresh.addEventListener("click", forceGraphRefresh);
 els.graphFormat.addEventListener("change", forceGraphRefresh);
+if (els.composerStop) {
+  els.composerStop.addEventListener("click", cancelCurrentTurn);
+}
+if (els.tabGraph) els.tabGraph.addEventListener("click", () => showRightTab("graph"));
+if (els.tabCode) els.tabCode.addEventListener("click", () => showRightTab("code"));
+if (els.codeRefresh) els.codeRefresh.addEventListener("click", () => fetchCode());
 
 ensureSession().catch((err) => {
   console.error(err);

@@ -404,6 +404,151 @@ def test_save_model_400_when_path_missing(client):
     assert r.status_code == 400
 
 
+# ---------------------------------------------------------------------------
+# cancel
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_endpoint_signals_session_when_turn_in_flight(client):
+    sid = client.post("/api/sessions").json()["sid"]
+    ui = state.REGISTRY.get(sid)
+    # Simulate a turn in flight — Session normally creates/clears this
+    # in send_user_message; tests poke it directly.
+    import asyncio
+
+    ui.session._cancel_event = asyncio.Event()
+
+    r = client.post(f"/api/sessions/{sid}/cancel")
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"cancelled": True}
+    ui.session.cancel_current_turn.assert_called_once()
+    assert ui.session._cancel_event.is_set()
+
+
+def test_cancel_endpoint_returns_no_active_turn_when_idle(client):
+    sid = client.post("/api/sessions").json()["sid"]
+    ui = state.REGISTRY.get(sid)
+    assert ui.session._cancel_event is None  # nothing in flight
+
+    r = client.post(f"/api/sessions/{sid}/cancel")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cancelled"] is False
+    assert "no active turn" in body["reason"]
+
+
+def test_cancel_endpoint_404_for_unknown_sid(client):
+    r = client.post("/api/sessions/no-such-sid/cancel")
+    assert r.status_code == 404
+
+
+def test_chat_emits_turn_cancelled_event_when_backend_yields_one(client):
+    """The agent backend's ``turn_cancelled`` must surface as its own
+    SSE event — that's what the JS handler keys off to paint the
+    ``Stopped by user.`` marker in the scrollback."""
+    sid = client.post("/api/sessions").json()["sid"]
+    ui = state.REGISTRY.get(sid)
+
+    async def _gen(text, *, anthropic_client=None):
+        ui.session.history.append({"role": "user", "content": text})
+        yield {"type": "text_chunk", "text": "starting…"}
+        yield {"type": "turn_cancelled"}
+        # If the SSE handler honours turn_cancelled it should NOT see
+        # this final event — the loop must break first.
+        yield {"type": "text_chunk", "text": "should-not-appear"}
+
+    ui.session.send_user_message = _gen
+
+    r = client.post(f"/api/sessions/{sid}/chat", json={"message": "long task"})
+    assert r.status_code == 200
+    text = r.text
+    assert "event: text_chunk" in text
+    assert "event: turn_cancelled" in text
+    assert "event: end" in text
+    assert "should-not-appear" not in text
+
+
+# ---------------------------------------------------------------------------
+# code (live preview pane)
+# ---------------------------------------------------------------------------
+
+
+def test_code_endpoint_calls_export_python_script_with_dry_run(client):
+    sid = client.post("/api/sessions").json()["sid"]
+    ui = state.REGISTRY.get(sid)
+    ui.active_composition = "h_demo"
+    ui.last_revision = 7
+    ui.session.call_tool = AsyncMock(
+        return_value=json.dumps(
+            {
+                "path": None,
+                "text": "import psyneulink as pnl\n# ...stub...\n",
+                "n_objects": 3,
+                "n_operations": 1,
+            }
+        )
+    )
+
+    r = client.get(f"/api/sessions/{sid}/code")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["composition"] == "h_demo"
+    assert body["revision"] == 7
+    assert "import psyneulink as pnl" in body["text"]
+    assert body["n_objects"] == 3
+    assert body["n_operations"] == 1
+    # The MCP-side coupling: dry_run=True keeps this poll cheap and
+    # disk-quiet. If this argv shape ever drifts, every poll will start
+    # writing a .py file — see the cross-repo coupling note in
+    # ``persistence.py``.
+    ui.session.call_tool.assert_awaited_once_with(
+        "export_python_script",
+        {"composition": "h_demo", "dry_run": True},
+    )
+
+
+def test_code_endpoint_returns_204_when_no_active_composition(client):
+    sid = client.post("/api/sessions").json()["sid"]
+    r = client.get(f"/api/sessions/{sid}/code")
+    assert r.status_code == 204
+
+
+def test_code_endpoint_falls_back_to_active_composition(client):
+    sid = client.post("/api/sessions").json()["sid"]
+    ui = state.REGISTRY.get(sid)
+    ui.active_composition = "h_active"
+    ui.session.call_tool = AsyncMock(
+        return_value=json.dumps({"path": None, "text": "src", "n_objects": 1})
+    )
+    r = client.get(f"/api/sessions/{sid}/code")
+    assert r.status_code == 200
+    ui.session.call_tool.assert_awaited_once_with(
+        "export_python_script",
+        {"composition": "h_active", "dry_run": True},
+    )
+
+
+def test_code_endpoint_explicit_composition_query_param_wins(client):
+    sid = client.post("/api/sessions").json()["sid"]
+    ui = state.REGISTRY.get(sid)
+    ui.active_composition = "h_active"
+    ui.session.call_tool = AsyncMock(
+        return_value=json.dumps({"path": None, "text": "src", "n_objects": 0})
+    )
+    r = client.get(f"/api/sessions/{sid}/code?composition=h_other")
+    assert r.status_code == 200
+    ui.session.call_tool.assert_awaited_once_with(
+        "export_python_script",
+        {"composition": "h_other", "dry_run": True},
+    )
+
+
+def test_code_endpoint_404_for_unknown_sid(client):
+    r = client.get("/api/sessions/no-such-sid/code")
+    assert r.status_code == 404
+
+
 def test_load_model_calls_load_python_script_tool(client):
     sid = client.post("/api/sessions").json()["sid"]
     ui = state.REGISTRY.get(sid)

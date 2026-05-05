@@ -52,31 +52,83 @@
           rows="3"
           placeholder="Describe a model, ask a question, or request a tool call…"
         ></textarea>
-        <button type="submit" id="composer-send" class="primary">Send</button>
+        <div class="composer-actions">
+          <button
+            type="button"
+            id="composer-stop"
+            class="stop-btn"
+            hidden
+            title="Stop the agent (cancels the current turn)"
+          >
+            Stop
+          </button>
+          <button type="submit" id="composer-send" class="primary">Send</button>
+        </div>
       </form>
     </section>
 
-    <section class="pane graph-pane">
-      <div class="graph-header">
-        <div>
-          <div class="graph-title">Composition graph</div>
-          <div class="graph-meta" id="graph-meta">no composition yet</div>
+    <section class="pane right-pane">
+      <div class="right-tabs" role="tablist">
+        <button
+          type="button"
+          class="right-tab active"
+          id="tab-graph"
+          role="tab"
+          aria-selected="true"
+        >
+          Graph
+        </button>
+        <button
+          type="button"
+          class="right-tab"
+          id="tab-code"
+          role="tab"
+          aria-selected="false"
+        >
+          Code
+        </button>
+      </div>
+
+      <div class="right-tab-panel" id="panel-graph" role="tabpanel">
+        <div class="graph-header">
+          <div>
+            <div class="graph-title">Composition graph</div>
+            <div class="graph-meta" id="graph-meta">no composition yet</div>
+          </div>
+          <div class="graph-controls">
+            <label>
+              format
+              <select id="graph-format">
+                <option value="png" selected>png</option>
+                <option value="svg">svg</option>
+              </select>
+            </label>
+            <button type="button" id="graph-refresh" class="dock-btn">refresh</button>
+          </div>
         </div>
-        <div class="graph-controls">
-          <label>
-            format
-            <select id="graph-format">
-              <option value="png" selected>png</option>
-              <option value="svg">svg</option>
-            </select>
-          </label>
-          <button type="button" id="graph-refresh" class="dock-btn">refresh</button>
+        <div class="graph-body">
+          <img id="graph-img" alt="composition graph" />
+          <div class="graph-empty" id="graph-empty">
+            Build or load a composition to see it rendered here.
+          </div>
         </div>
       </div>
-      <div class="graph-body">
-        <img id="graph-img" alt="composition graph" />
-        <div class="graph-empty" id="graph-empty">
-          Build or load a composition to see it rendered here.
+
+      <div class="right-tab-panel" id="panel-code" role="tabpanel" hidden>
+        <div class="code-header">
+          <div>
+            <div class="code-title">Composition as Python</div>
+            <div class="code-meta" id="code-meta">no composition yet</div>
+          </div>
+          <div class="code-controls">
+            <button type="button" id="code-refresh" class="dock-btn">refresh</button>
+          </div>
+        </div>
+        <div class="code-body">
+          <pre class="code-pre"><code id="code-text"></code></pre>
+          <div class="code-empty" id="code-empty">
+            Build or load a composition to see its Python source here.
+          </div>
         </div>
       </div>
     </section>
