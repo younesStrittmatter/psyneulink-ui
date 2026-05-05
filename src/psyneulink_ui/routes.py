@@ -57,31 +57,81 @@ def _require(sid: str) -> UISession:
     return ui
 
 
+def _composition_handle_from_result(content: Any) -> str | None:
+    """Extract a Composition handle from a tool_result payload, if any.
+
+    MCP curated tools return a JSON object like
+    ``{"handle": "h_...", "type": "Composition", "name": "..."}``. The
+    transport may surface this as either a string (SDK backend) or a
+    list of text blocks (CLI backend's stream-json shape) — handle
+    both. Anything else (non-Composition objects, malformed strings,
+    etc.) returns None and the caller leaves ``active_composition``
+    untouched.
+    """
+    text: str | None = None
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                inner = item.get("text", "")
+                if isinstance(inner, str):
+                    parts.append(inner)
+        text = "\n".join(parts) if parts else None
+    if text is None:
+        return None
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    if parsed.get("type") != "Composition":
+        return None
+    handle = parsed.get("handle")
+    if isinstance(handle, str) and handle.startswith(COMPOSITION_HANDLE_PREFIX):
+        return handle
+    return None
+
+
 def _scan_for_composition_handle(value: Any) -> str | None:
     """Walk a tool_use ``input`` payload looking for a composition handle.
 
     The MCP convention is that composition handles are short strings
-    starting with the ``h_`` prefix. We scan recursively because some
-    tools nest composition refs inside dicts/lists. Last hit wins;
-    callers use this to update ``UISession.active_composition``.
+    starting with the ``h_`` prefix and that every curated tool which
+    takes a composition exposes it under a top-level key literally
+    named ``composition`` (see ``psyneulink_mcp/tools/curated/*.py``).
+
+    We honour that convention strictly: when a dict has a
+    ``composition`` key, that value wins. Falling back to "scan every
+    ``h_`` we can find, last hit wins" was wrong — for tools like
+    ``add_linear_pathway`` whose input is
+    ``{composition: h_demo, nodes: [h_input, h_output]}`` it would
+    happily promote ``h_output`` to active composition and break every
+    subsequent ``render_composition_graph`` call.
     """
     if isinstance(value, str):
         if value.startswith(COMPOSITION_HANDLE_PREFIX):
             return value
         return None
     if isinstance(value, dict):
+        if "composition" in value:
+            hit = _scan_for_composition_handle(value["composition"])
+            if hit is not None:
+                return hit
+        # No explicit composition arg: recurse but only into nested
+        # dicts (not lists, which usually carry node refs). This still
+        # catches future tool shapes that nest composition handles
+        # inside grouping dicts.
         found: str | None = None
-        for v in value.values():
-            hit = _scan_for_composition_handle(v)
-            if hit is not None:
-                found = hit
-        return found
-    if isinstance(value, (list, tuple)):
-        found = None
-        for v in value:
-            hit = _scan_for_composition_handle(v)
-            if hit is not None:
-                found = hit
+        for k, v in value.items():
+            if k == "composition":
+                continue
+            if isinstance(v, dict):
+                hit = _scan_for_composition_handle(v)
+                if hit is not None:
+                    found = hit
         return found
     return None
 
@@ -184,6 +234,18 @@ async def chat(sid: str, request: Request) -> StreamingResponse:
                         },
                     )
                 elif etype == "tool_result":
+                    # ``create_composition`` is the only place a brand-
+                    # new composition handle exists *only* in the
+                    # result payload (the input had no composition arg
+                    # to scan). Pluck it out here so the UI's graph
+                    # endpoints have something to render even if the
+                    # turn ends right after creation.
+                    if not ev.get("is_error"):
+                        new_handle = _composition_handle_from_result(
+                            ev.get("content", "")
+                        )
+                        if new_handle is not None:
+                            ui.active_composition = new_handle
                     yield sse_event(
                         "tool_result",
                         {

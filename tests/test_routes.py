@@ -119,6 +119,60 @@ def test_chat_updates_active_composition_from_tool_use(client):
     assert snap["active_composition"] == "h_demo"
 
 
+def test_scan_for_composition_handle_prefers_explicit_composition_arg():
+    """Regression: ``add_linear_pathway`` etc. carry node handles in a
+    ``nodes`` list alongside the composition ref. The old "last hit
+    wins" scan would happily pick a node handle as the active
+    composition, breaking every subsequent ``render_composition_graph``
+    call with "h_X is not a Composition handle"."""
+    from psyneulink_ui.routes import _scan_for_composition_handle
+
+    payload = {
+        "composition": "h_demo",
+        "nodes": ["h_input_layer", "h_output_layer"],
+    }
+    assert _scan_for_composition_handle(payload) == "h_demo"
+
+
+def test_scan_for_composition_handle_ignores_lone_h_in_lists():
+    """A bare list of node handles (no composition arg) must NOT be
+    interpreted as composition refs."""
+    from psyneulink_ui.routes import _scan_for_composition_handle
+
+    assert _scan_for_composition_handle(["h_a", "h_b"]) is None
+    assert _scan_for_composition_handle({"nodes": ["h_a", "h_b"]}) is None
+
+
+def test_composition_handle_from_result_picks_up_create_composition():
+    """``create_composition`` is the only place a brand-new composition
+    handle exists *only* in the result payload — the input has no
+    composition arg to scan. Make sure the result-side helper finds
+    it for both transport shapes."""
+    from psyneulink_ui.routes import _composition_handle_from_result
+
+    raw_str = json.dumps(
+        {"handle": "h_new", "type": "Composition", "name": "demo"}
+    )
+    assert _composition_handle_from_result(raw_str) == "h_new"
+
+    raw_blocks = [{"type": "text", "text": raw_str}]
+    assert _composition_handle_from_result(raw_blocks) == "h_new"
+
+
+def test_composition_handle_from_result_ignores_non_composition_results():
+    """``create_transfer_mechanism`` returns a handle too — but
+    ``type=="TransferMechanism"`` so it must NOT be promoted to active
+    composition."""
+    from psyneulink_ui.routes import _composition_handle_from_result
+
+    mech = json.dumps(
+        {"handle": "h_mech", "type": "TransferMechanism", "name": "input"}
+    )
+    assert _composition_handle_from_result(mech) is None
+    assert _composition_handle_from_result("not even json") is None
+    assert _composition_handle_from_result(None) is None
+
+
 # ---------------------------------------------------------------------------
 # graph
 # ---------------------------------------------------------------------------
